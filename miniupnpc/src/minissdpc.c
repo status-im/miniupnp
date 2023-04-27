@@ -470,11 +470,7 @@ static int upnp_gettimeofday(struct timeval * tv)
 	return 0; /* success */
 #elif defined(CLOCK_MONOTONIC_FAST) || defined(CLOCK_MONOTONIC)
 #if defined(__APPLE__)
-#if defined(__clang__)
-	if (__builtin_available(macOS 10.12, iOS 10.0, tvOS 10.0, watchOS 3.0, *)) {
-#else /* !defined(__clang__) */
 	if (clock_gettime != NULL) {
-#endif /* defined(__clang__) */
 #endif /* defined(__APPLE__) */
 		struct timespec ts;
 		int ret_code = clock_gettime(UPNP_CLOCKID, &ts);
