@@ -1,8 +1,11 @@
-cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.12 FATAL_ERROR)
 
-project (miniupnpc C)
+project (miniupnpc
+         VERSION 2.2.3
+         DESCRIPTION "UPnP IGD client lightweight library"
+         HOMEPAGE_URL https://miniupnp.tuxfamily.org/
+         LANGUAGES C)
 
-set (MINIUPNPC_VERSION 2.2.3)
 set (MINIUPNPC_API_VERSION 17)
 
 option (UPNPC_BUILD_STATIC "Build static library" TRUE)
@@ -141,7 +144,7 @@ if (UPNPC_BUILD_SHARED)
   add_library (miniupnpc::miniupnpc ALIAS libminiupnpc-shared)
   set_target_properties (libminiupnpc-shared PROPERTIES EXPORT_NAME miniupnpc)
   set_target_properties (libminiupnpc-shared PROPERTIES OUTPUT_NAME "miniupnpc")
-  set_target_properties (libminiupnpc-shared PROPERTIES VERSION ${MINIUPNPC_VERSION})
+  set_target_properties (libminiupnpc-shared PROPERTIES VERSION ${PROJECT_VERSION})
   set_target_properties (libminiupnpc-shared PROPERTIES SOVERSION ${MINIUPNPC_API_VERSION})
   target_link_libraries (libminiupnpc-shared PRIVATE miniupnpc-private)
   target_compile_definitions(libminiupnpc-shared PRIVATE MINIUPNP_EXPORTS)
@@ -216,8 +219,44 @@ if (UPNPC_BUILD_TESTS)
   )
   target_link_libraries (testaddr_is_reserved PRIVATE miniupnpc-tests)
 
+  add_executable (testportlistingparse src/testportlistingparse.c
+                                       src/minixml.c src/portlistingparse.c)
+  target_include_directories (testportlistingparse PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+  target_link_libraries (testportlistingparse PRIVATE miniupnpc-tests)
+
+  add_executable (minihttptestserver src/minihttptestserver.c)
+
 # set (UPNPC_INSTALL_TARGETS ${UPNPC_INSTALL_TARGETS} testminixml minixmlvalid testupnpreplyparse testigddescparse testminiwget)
+  include(CTest)
+  add_test(NAME validateminixml
+           COMMAND minixmlvalid)
+  add_test(NAME validateminiwget
+           COMMAND ${CMAKE_SOURCE_DIR}/testminiwget.sh)
+  set_property(TEST validateminiwget
+               PROPERTY ENVIRONMENT
+               TESTSERVER=${CMAKE_BINARY_DIR}/minihttptestserver
+               TESTMINIWGET=${CMAKE_BINARY_DIR}/testminiwget)
+  add_test(NAME validateupnpreplyparse
+           COMMAND ${CMAKE_SOURCE_DIR}/testupnpreplyparse.sh
+           WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+  set_property(TEST validateupnpreplyparse
+               PROPERTY ENVIRONMENT
+               TESTUPNPREPLYPARSE=${CMAKE_BINARY_DIR}/testupnpreplyparse)
+  add_test(NAME validateportlistingparse
+           COMMAND testportlistingparse)
+  add_test(NAME validateigddescparse1
+           COMMAND testigddescparse new_LiveBox_desc.xml new_LiveBox_desc.values
+           WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/testdesc)
+  add_test(NAME validateigddescparse2
+           COMMAND testigddescparse linksys_WAG200G_desc.xml linksys_WAG200G_desc.values
+           WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/testdesc)
+  add_test(NAME validateaddr_is_reserved
+           COMMAND testaddr_is_reserved)
+
 endif ()
+
+configure_file(miniupnpc.pc.in miniupnpc.pc @ONLY)
 
 if (NOT UPNPC_NO_INSTALL)
   install (FILES
@@ -236,6 +275,10 @@ if (NOT UPNPC_NO_INSTALL)
 
   install(FILES miniupnpc-config.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/miniupnpc
+  )
+
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/miniupnpc.pc
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
   )
 endif()
 
