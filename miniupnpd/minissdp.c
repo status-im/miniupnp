@@ -2,7 +2,7 @@
 /* vim: tabstop=4 shiftwidth=4 noexpandtab
  * MiniUPnP project
  * http://miniupnp.free.fr/ or https://miniupnp.tuxfamily.org/
- * (c) 2006-2024 Thomas Bernard
+ * (c) 2006-2025 Thomas Bernard
  * This software is subject to the conditions detailed
  * in the LICENCE file provided within the distribution */
 
@@ -220,7 +220,11 @@ OpenAndConfSSDPReceiveSocket(int ipv6)
 #endif /* IP_PKTINFO */
 #if defined(ENABLE_IPV6) && defined(IPV6_RECVPKTINFO)
 	if(ipv6) {
+#ifdef IPPROTO_IPV6
+		if(setsockopt(s, IPPROTO_IPV6, IPV6_RECVPKTINFO, &on, sizeof(on)) < 0)
+#else
 		if(setsockopt(s, IPPROTO_IP, IPV6_RECVPKTINFO, &on, sizeof(on)) < 0)
+#endif
 		{
 			syslog(LOG_WARNING, "setsockopt(udp, IPV6_RECVPKTINFO): %m");
 		}
@@ -402,7 +406,19 @@ OpenAndConfSSDPNotifySocketIPv6(struct lan_addr_s * lan_addr)
 		close(s);
 		return -1;
 	}
-
+#if defined(SO_BINDTODEVICE) && !defined(MULTIPLE_EXTERNAL_IP)
+	/* One and only one LAN interface */
+	if(lan_addrs.lh_first != NULL && lan_addrs.lh_first->list.le_next == NULL
+	   && lan_addrs.lh_first->ifname[0] != '\0')
+	{
+		if(setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE,
+		              lan_addrs.lh_first->ifname,
+		              strlen(lan_addrs.lh_first->ifname) + 1) < 0)
+			syslog(LOG_WARNING, "%s: setsockopt(udp6, SO_BINDTODEVICE, %s): %m",
+			       "OpenAndConfSSDPNotifySocketIPv6",
+			       lan_addrs.lh_first->ifname);
+	}
+#endif /* defined(SO_BINDTODEVICE) && !defined(MULTIPLE_EXTERNAL_IP) */
 	/* bind() socket before using sendto() is not mandatory
 	 * (sendto() will implicitly bind the socket when called on
 	 * an unbound socket)

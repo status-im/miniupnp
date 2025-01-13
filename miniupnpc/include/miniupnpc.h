@@ -1,9 +1,9 @@
-/* $Id: miniupnpc.h,v 1.66 2024/06/08 22:13:14 nanard Exp $ */
+/* $Id: miniupnpc.h,v 1.69 2025/01/10 23:19:30 nanard Exp $ */
 /* vim: tabstop=4 shiftwidth=4 noexpandtab
  * Project: miniupnp
  * http://miniupnp.free.fr/ or https://miniupnp.tuxfamily.org/
  * Author: Thomas Bernard
- * Copyright (c) 2005-2024 Thomas Bernard
+ * Copyright (c) 2005-2025 Thomas Bernard
  * This software is subjects to the conditions detailed
  * in the LICENCE file provided within this distribution */
 #ifndef MINIUPNPC_H_INCLUDED
@@ -20,8 +20,8 @@
 #define UPNPDISCOVER_MEMORY_ERROR (-102)
 
 /* versions : */
-#define MINIUPNPC_VERSION	"2.2.8"
-#define MINIUPNPC_API_VERSION	18
+#define MINIUPNPC_VERSION	"2.3.0"
+#define MINIUPNPC_API_VERSION	19
 
 /* Source port:
    Using "1" as an alias for 1900 for backwards compatibility
@@ -37,7 +37,7 @@ extern "C" {
 struct UPNParg { const char * elt; const char * val; };
 
 char *
-simpleUPnPcommand(int, const char *, const char *,
+simpleUPnPcommand(const char *, const char *,
                   const char *, struct UPNParg *,
                   int *);
 
@@ -104,15 +104,21 @@ struct UPNPUrls {
 	char * rootdescURL;
 };
 
+#define UPNP_NO_IGD (0)
+#define UPNP_CONNECTED_IGD (1)
+#define UPNP_PRIVATEIP_IGD (2)
+#define UPNP_DISCONNECTED_IGD (3)
+#define UPNP_UNKNOWN_DEVICE (4)
 /* UPNP_GetValidIGD() :
  * return values :
- *     0 = NO IGD found
- *     1 = A valid connected IGD has been found
+ *     0 = NO IGD found (UPNP_NO_IGD)
+ *     1 = A valid connected IGD has been found (UPNP_CONNECTED_IGD)
  *     2 = A valid connected IGD has been found but its
- *         IP address is reserved (non routable)
+ *         IP address is reserved (non routable) (UPNP_PRIVATEIP_IGD)
  *     3 = A valid IGD has been found but it reported as
- *         not connected
+ *         not connected (UPNP_DISCONNECTED_IGD)
  *     4 = an UPnP device has been found but was not recognized as an IGD
+ *         (UPNP_UNKNOWN_DEVICE)
  *
  * In any non zero return case, the urls and data structures
  * passed as parameters are set. Donc forget to call FreeUPNPUrls(urls) to
