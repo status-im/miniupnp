@@ -4,7 +4,6 @@
 # https://stackoverflow.com/questions/45630032/valueerror-no-pkg-info-in-archive
 
 environment:
-  APP_VERSION: '2.2'
   # for pypi/twine
   USER: '__token__'
   PASS:
@@ -76,8 +75,6 @@ environment:
       ARCH_BITS: 64
 
 
-version: '$(APP_VERSION).{build}'
-
 install:
   - set PATH=%PYTHON_VER%;%PYTHON_VER%\Scripts;%PATH%;C:\msys64\mingw%ARCH_BITS%\bin
   # We need wheel installed to build wheels
@@ -87,6 +84,11 @@ install:
   - echo "using twine login %USER% %PASS%"
   - echo %PATH%
   - cc -v
+
+before_build:
+  - ps: |
+      $version = Get-Content miniupnpc\VERSION
+      Update-AppveyorBuild -Version "$version.$env:APPVEYOR_BUILD_NUMBER"
 
 build_script:
   - cd miniupnpc
