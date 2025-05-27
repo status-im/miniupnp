@@ -1,4 +1,53 @@
-$Id: Changelog.txt,v 1.523 2025/01/10 22:10:49 nanard Exp $
+$Id: Changelog.txt,v 1.535 2025/04/26 13:07:53 nanard Exp $
+
+2025/05/26:
+  Fix false negative filtered STUN CGNAT test result for
+    unsupported servers #825
+
+2025/05/24:
+  Fix Mac OS X 10.9 build
+
+2025/05/15:
+  build: teststun executable
+
+2025/04/28:
+  pf: fix delete_pinhole for openbsd. Was broken since miniupnpd 2.3.7
+
+2025/04/26
+  Fix parsing of interfaces names starting with a digit
+  nftables: add counter for DNAT rule (ENABLE_NFT_RULE_COUNTER in config.h)
+  nftables: improve scripts to support already existing tables
+
+VERSION 2.3.9 : released on 2025/04/22
+
+2025/04/22:
+  NFTables: don't apply iif to rules if USE_IFNAME_IN_RULES is disabled
+
+2025/04/16:
+  Restore the default behavior of update_ext_ip_addr_from_stun function,
+    and now setting ext_perform_stun=allow-filtered would allow failed
+    STUN CGNAT filter check to be ignored
+
+2025/04/10:
+  Unify naming scheme and rename to ext_allow_private_ipv4 for
+  ignore_private_ip_check
+  Remove the ability to disable port forwarding for
+  update_ext_ip_addr_from_stun function
+
+2025/04/08:
+  improve get_wan_connection_status()
+
+2025/04/07:
+  Add a ignore_private_ip_check option in the configuration file to enable
+    port forwarding even with a WAN IP address in a reserved/private subnet
+
+VERSION 2.3.8 : released on 2025/04/03
+
+2025/04/03:
+  Add doxygen documentation to some of the functions
+
+2025/03/31:
+  Clean bsd/ subdirectory. Build testifacewatcher
 
 2025/01/25:
   Send byebye messages also to FF05::C (and eventually FF0E::C)
