@@ -1,5 +1,104 @@
 $Id: Changelog.txt,v 1.535 2025/04/26 13:07:53 nanard Exp $
 
+2026/11/13:
+  upnpredirect.c: add upnp_get_redirection_infos_by_ituple()
+
+2026/11/12:
+  fix startup_time() with BSD and system_uptime=yes
+
+2026/11/11:
+  open the IPv6 PCP socket only when NAT-PMP/PCP is enabled
+
+2026/11/10:
+  libpfctl: fix error return checks
+
+2026/11/02:
+  netfilter: support DNAT rules rev 2 (iptables 1.8.8+)
+  PCP/NAT-PMP: various fixes
+  check malloc() return in ProcessHTTPPOST_upnphttp()
+  nftables: better handle errors in table_cb()
+
+2026/10/31:
+  pf: fix delete_nat_rule() to match the external port too.
+  netfilter: check calloc() failures in iptables rule builders
+  nftables: support remote host in IPv4 port mappings
+  PCP: fix answer a renewed PCP pinhole with its internal port
+  PCP: give long lifetime errors a lifetime
+
+2026/10/20:
+  pf: fix IPv6 pinhole delete and IPv4 delete_nat_rule()
+
+2026/10/09:
+  nftables: adds a meta nfproto match when the rule family is NFPROTO_INET
+
+2026/10/03:
+  MX: 0 in SSDP is invalid. fixes CVE-2026-107159
+
+2026/09/10:
+  use /etc/debian-version or equivalent
+
+2026/09/03:
+  filter out non printable characters in description and remote host
+    for ipv6 lease file
+
+2026/08/29:
+  added testupnphttp
+  upnphttp: do not call realloc() once per recv()
+  enforce Content-Length / header limit on HTTP receive
+  Support remote host in lease file
+
+2026/08/28:
+  re-enable port forwarding with reserved address when ext_allow_private_ipv4
+  pf: set pool address family
+
+VERSION 2.3.11 : released on 2026/08/12
+
+2026/08/11:
+  fix READNU32 by casting to uint32_t
+  filter out non printable characters in description for lease file
+
+2026/08/09:
+  check for the return value of snprintf() : overflow or error
+
+2026/06/16:
+  nftables: Avoid building too long rule with
+    nftnl_rule_nlmsg_build_payload() by triming description to 256 chars.
+  HTTPS: Do not abort on SSL errors
+
+2026/06/10:
+  Fix heap overflow in PinholeVerification()
+
+2026/05/02:
+  Free resources on start error
+  print usage on stdout or stderr depending on command line
+  increase maximum description length when possible (netfilter/nftables)
+  fix nfqueue code
+
+2026/04/13:
+  Re-enable port forwarding properly (broken in 2.3.10)
+
+2026/04/07:
+  Fix PCP option size parsing thanks to Sebastián Alba.
+
+2026/04/01:
+  Allow using ip/mask when IPv6 is compiled but disabled
+
+2026/03/31:
+  use a 8kB buffer for Netlink as recommended
+  fix URL parsing in upnpevents.c
+
+VERSION 2.3.10 : released on 2026/03/24
+
+2026/03/24:
+  fix missing fclose and potential double free in option file parsing
+
+2026/03/23:
+  upnphttp.c: fix removal of quotes in ParseHttpHeaders()
+  minixml.c: fix buffer read overflow
+
+2026/02/05:
+  Rewrite permission line parser
+
 2025/05/26:
   Fix false negative filtered STUN CGNAT test result for
     unsupported servers #825

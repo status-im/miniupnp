@@ -3,7 +3,7 @@
  * http://miniupnp.free.fr/ or https://miniupnp.tuxfamily.org/
  * (c) 2015 Tomofumi Hayashi
  * (c) 2019 Paul Chambers
- * (c) 2020-2024 Thomas Bernard
+ * (c) 2020-2026 Thomas Bernard
  *
  * This software is subject to the conditions detailed
  * in the LICENCE file provided within the distribution.
@@ -23,6 +23,7 @@ extern int nft_ipv6_family;
 
 enum rule_reg_type { 
 	RULE_REG_NONE,
+	RULE_REG_PROTO,
 	RULE_REG_IIF,
 	RULE_REG_OIF,
 	RULE_REG_IP_SRC_ADDR,
@@ -115,7 +116,7 @@ nft_send_rule(struct nftnl_rule * rule, uint16_t cmd, enum rule_chain_type type)
 struct nftnl_rule *
 rule_set_dnat(uint8_t family, const char * ifname, uint8_t proto,
 	      in_addr_t rhost, unsigned short eport,
-	      in_addr_t ihost, uint32_t iport,
+	      in_addr_t ihost, unsigned short iport,
 	      const char *descr,
 	      const char *handle);
 struct nftnl_rule *

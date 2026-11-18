@@ -4,7 +4,7 @@
  * http://miniupnp.free.fr/ or https://miniupnp.tuxfamily.org/
  * (c) 2015 Tomofumi Hayashi
  * (c) 2019 Paul Chambers
- * (c) 2019-2025 Thomas Bernard
+ * (c) 2019-2026 Thomas Bernard
  *
  * This software is subject to the conditions detailed
  * in the LICENCE file provided within the distribution.
@@ -59,6 +59,12 @@
 #define log_debug(args...)	syslog(LOG_DEBUG, args)
 #endif
 
+#ifndef MIN
+#define MIN(x,y) (((x)<(y))?(x):(y))
+#endif
+
+/* maximum length of USERDATA, used for description */
+#define NFTNL_RULE_USERDATA_MAX_LEN 256
 
 #define RULE_CACHE_INVALID  0
 #define RULE_CACHE_VALID    1
@@ -253,20 +259,20 @@ parse_rule_meta(struct nftnl_expr *e, rule_t *r)
 {
 	uint32_t key = nftnl_expr_get_u32(e, NFTNL_EXPR_META_KEY);
 	uint32_t dreg = nftnl_expr_get_u32(e, NFTNL_EXPR_META_DREG);
-	enum rule_reg_type reg_type;
 
 	/* ToDo: body of both cases are identical - bug? */
 	switch (key) {
 	case NFT_META_IIF:
-		reg_type = RULE_REG_IIF;
-		set_reg(r, dreg, reg_type, 0);
+		set_reg(r, dreg, RULE_REG_IIF, 0);
 		break;
 	case NFT_META_OIF:
-		reg_type = RULE_REG_IIF;
-		set_reg(r, dreg, reg_type, 0);
+		set_reg(r, dreg, RULE_REG_IIF, 0);
+		break;
+	case NFT_META_NFPROTO:
+		set_reg(r, dreg, RULE_REG_PROTO, 0);
 		break;
 	default:
-		log_debug("parse_rule_meta :Not support key %d\n", key);
+		log_debug("parse_rule_meta: key %d unsupported\n", key);
 		break;
 	}
 }
@@ -484,6 +490,10 @@ parse_rule_cmp(struct nftnl_expr *e, rule_t *r)
 			r->dport = ntohs(ports[1]);
 		}
 		break;
+	case RULE_REG_PROTO:
+		/* value is 8bits either NFPROTO_IPV4=2 or NFPROTO_IPV6=10 */
+		/* we don't do anything with it for now */
+		break;
 	default:
 		log_debug("Unknown cmp (r1type:%d, data_len:%d, op:%d)",
 			   r->reg1_type, data_len, op);
@@ -523,6 +533,7 @@ struct table_cb_data {
 	const char * table;
 	const char * chain;
 	enum rule_type type;
+	int alloc_failed;
 };
 
 /* callback.
@@ -543,17 +554,18 @@ table_cb(const struct nlmsghdr *nlh, void *data)
 	rule = nftnl_rule_alloc();
 	if (rule == NULL) {
 		log_error("nftnl_rule_alloc() FAILED");
-		return MNL_CB_ERROR;
+		CB_DATA(alloc_failed) = 1;
+		return MNL_CB_OK;
 	}
 	if (nftnl_rule_nlmsg_parse(nlh, rule) < 0) {
 		log_error("nftnl_rule_nlmsg_parse FAILED");
-		result = MNL_CB_ERROR;
+		CB_DATA(alloc_failed) = 1;
 	} else {
 		rule_t *r = malloc(sizeof(rule_t));
 		if (r == NULL) {
 			syslog(LOG_ERR, "%s: failed to allocate %u bytes",
 			       "table_cb", (unsigned)sizeof(rule_t));
-			result = MNL_CB_ERROR;
+			CB_DATA(alloc_failed) = 1;
 		} else {
 			const char *chain;
 
@@ -565,6 +577,15 @@ table_cb(const struct nlmsghdr *nlh, void *data)
 				strcmp(chain, nft_forward_chain) == 0) {
 				r->table = strdup(nftnl_rule_get_str(rule, NFTNL_RULE_TABLE));
 				r->chain = strdup(chain);
+				if (r->table == NULL || r->chain == NULL) {
+					syslog(LOG_ERR, "%s: strdup() failed", "table_cb");
+					free(r->table);
+					free(r->chain);
+					free(r);
+					nftnl_rule_free(rule);
+					CB_DATA(alloc_failed) = 1;
+					return MNL_CB_OK;
+				}
 				r->family = nftnl_rule_get_u32(rule, NFTNL_RULE_FAMILY);
 				if (nftnl_rule_is_set(rule, NFTNL_RULE_USERDATA)) {
 					const char *descr;
@@ -732,6 +753,7 @@ refresh_nft_cache(struct rule_list *head, const char *table, const char *chain, 
 	data.table = table;
 	data.chain = chain;
 	data.type = type;
+	data.alloc_failed = 0;
 	do {
 		n = mnl_socket_recvfrom(mnl_sock, buf, sizeof(buf));
 		if (n < 0) {
@@ -752,6 +774,12 @@ refresh_nft_cache(struct rule_list *head, const char *table, const char *chain, 
 	} while(ret >= 1 /*== MNL_CB_OK*/);
 	/* ret == MNL_CB_STOP */
 
+	if (data.alloc_failed) {
+		/* the dump was read to the end, but the cache is incomplete */
+		syslog(LOG_ERR, "%s: rule cache refresh incomplete", "refresh_nft_cache");
+		flush_nft_cache(head);
+		return -1;
+	}
 	return 0;
 }
 
@@ -825,6 +853,29 @@ expr_add_meta(struct nftnl_rule *r, uint32_t meta_key, uint32_t dreg)
 	nftnl_expr_set_u32(e, NFTNL_EXPR_META_DREG, dreg);
 
 	nftnl_rule_add_expr(r, e);
+}
+
+/*
+ * Add a "meta nfproto == <nfproto>" match.
+ * The rules built in this file compare raw network-header payload at fixed
+ * IPv4 (or IPv6) offsets. When the rule lives in an NFPROTO_INET table (the
+ * default nft_*_family, as used by OpenWrt's fw4), that table is also walked
+ * for packets of the other address family, where those offsets point at
+ * unrelated, sender-chosen bytes. Without a family match the rule can then
+ * match the wrong family. This pins the rule to its intended family.
+ * It is only needed (and only valid) in an inet table; for an ip/ip6 table
+ * the family is already implied, so emit nothing there.
+ */
+static void
+expr_add_nfproto(struct nftnl_rule *r, uint8_t nfproto)
+{
+	uint8_t family = (uint8_t)nftnl_rule_get_u32(r, NFTNL_RULE_FAMILY);
+
+	if (family != NFPROTO_INET)
+		return;
+
+	expr_add_meta(r, NFT_META_NFPROTO, NFT_REG_1);
+	expr_add_cmp(r, NFT_REG_1, NFT_CMP_EQ, &nfproto, sizeof(uint8_t));
 }
 
 static void
@@ -920,9 +971,14 @@ rule_set_snat(uint8_t family, uint8_t proto,
 	nftnl_rule_set_str(r, NFTNL_RULE_CHAIN, nft_postrouting_chain);
 
 	if (descr != NULL && *descr != '\0') {
+		uint32_t len = strlen(descr);
 		nftnl_rule_set_data(r, NFTNL_RULE_USERDATA,
-							descr, strlen(descr));
+							descr, MIN(len, NFTNL_RULE_USERDATA_MAX_LEN));
 	}
+
+	/* Family: these IPv4 offsets must not be evaluated against IPv6 packets
+	 * when the rule lives in an inet table. */
+	expr_add_nfproto(r, NFPROTO_IPV4);
 
 	/* Destination IP */
 	expr_add_payload(r, NFT_PAYLOAD_NETWORK_HEADER, NFT_REG_1,
@@ -976,14 +1032,13 @@ rule_set_snat(uint8_t family, uint8_t proto,
 struct nftnl_rule *
 rule_set_dnat(uint8_t family, const char * ifname, uint8_t proto,
 	      in_addr_t rhost, unsigned short eport,
-	      in_addr_t ihost, uint32_t iport,
+	      in_addr_t ihost, unsigned short iport,
 	      const char *descr,
 	      const char *handle)
 {
 	struct nftnl_rule *r = NULL;
 	uint16_t dport;
 	uint64_t handle_num;
-	uint32_t if_idx;
 
 	r = nftnl_rule_alloc();
 	if (r == NULL) {
@@ -996,8 +1051,9 @@ rule_set_dnat(uint8_t family, const char * ifname, uint8_t proto,
 	nftnl_rule_set_str(r, NFTNL_RULE_CHAIN, nft_prerouting_chain);
 
 	if (descr != NULL && *descr != '\0') {
+		uint32_t len = strlen(descr);
 		nftnl_rule_set_data(r, NFTNL_RULE_USERDATA,
-							descr, strlen(descr));
+							descr, MIN(len, NFTNL_RULE_USERDATA_MAX_LEN));
 	}
 
 	if (handle != NULL) {
@@ -1007,12 +1063,17 @@ rule_set_dnat(uint8_t family, const char * ifname, uint8_t proto,
 
 #ifdef USE_IFNAME_IN_RULES
 	if (ifname != NULL) {
+		uint32_t if_idx;
 		if_idx = (uint32_t)if_nametoindex(ifname);
 		expr_add_meta(r, NFT_META_IIF, NFT_REG_1);
 		expr_add_cmp(r, NFT_REG_1, NFT_CMP_EQ, &if_idx,
 			     sizeof(uint32_t));
 	}
 #endif
+
+	/* Family: these IPv4 offsets must not be evaluated against IPv6 packets
+	 * when the rule lives in an inet table. */
+	expr_add_nfproto(r, NFPROTO_IPV4);
 
 	/* Source IP */
 	if (rhost != 0) {
@@ -1066,6 +1127,10 @@ rule_set_filter(uint8_t family, const char * ifname, uint8_t proto,
 
 	r = rule_set_filter_common(r, family, ifname, proto, eport, iport, rport, descr, handle);
 
+	/* Family: in an inet table the IPv4 payload offsets below would also be
+	 * evaluated against IPv6 packets, so constrain to IPv4 first. */
+	expr_add_nfproto(r, NFPROTO_IPV4);
+
 	/* Destination IP */
 	expr_add_payload(r, NFT_PAYLOAD_NETWORK_HEADER, NFT_REG_1,
 	                 offsetof(struct iphdr, daddr), sizeof(uint32_t));
@@ -1114,6 +1179,10 @@ rule_set_filter6(uint8_t family, const char * ifname, uint8_t proto,
 
 	r = rule_set_filter_common(r, family, ifname, proto, eport, iport, rport, descr, handle);
 
+	/* Family: mirror of the IPv4 case. In an inet table, constrain to IPv6
+	 * so these offsets are not evaluated against IPv4 packets. */
+	expr_add_nfproto(r, NFPROTO_IPV6);
+
 	/* Destination IP */
 	expr_add_payload(r, NFT_PAYLOAD_NETWORK_HEADER, NFT_REG_1,
 	                 offsetof(struct ipv6hdr, daddr), sizeof(struct in6_addr));
@@ -1151,7 +1220,6 @@ rule_set_filter_common(struct nftnl_rule *r, uint8_t family, const char * ifname
 {
 	uint16_t dport, sport;
 	uint64_t handle_num;
-	uint32_t if_idx;
 	UNUSED(eport);
 
 	nftnl_rule_set_u32(r, NFTNL_RULE_FAMILY, family);
@@ -1159,8 +1227,9 @@ rule_set_filter_common(struct nftnl_rule *r, uint8_t family, const char * ifname
 	nftnl_rule_set_str(r, NFTNL_RULE_CHAIN, nft_forward_chain);
 
 	if (descr != NULL && *descr != '\0') {
+		uint32_t len = strlen(descr);
 		nftnl_rule_set_data(r, NFTNL_RULE_USERDATA,
-							descr, strlen(descr));
+							descr, MIN(len, NFTNL_RULE_USERDATA_MAX_LEN));
 	}
 
 	if (handle != NULL) {
@@ -1170,6 +1239,7 @@ rule_set_filter_common(struct nftnl_rule *r, uint8_t family, const char * ifname
 
 #ifdef USE_IFNAME_IN_RULES
 	if (ifname != NULL) {
+		uint32_t if_idx;
 		if_idx = (uint32_t)if_nametoindex(ifname);
 		expr_add_meta(r, NFT_META_IIF, NFT_REG_1);
 		expr_add_cmp(r, NFT_REG_1, NFT_CMP_EQ, &if_idx,
@@ -1400,20 +1470,23 @@ struct mnl_nlmsg_batch *
 start_batch(char *buf, size_t buf_size)
 {
 	struct mnl_nlmsg_batch *result;
-	mnl_seq = time(NULL);
 
 	if (mnl_sock == NULL) {
 		log_error("netlink not connected");
-		result = NULL;
-	} else {
-		result = mnl_nlmsg_batch_start(buf, buf_size);
-		if (result != NULL) {
-			nft_mnl_batch_put(mnl_nlmsg_batch_current(result),
-							  NFNL_MSG_BATCH_BEGIN, mnl_seq++);
-			mnl_nlmsg_batch_next(result);
-		}
+		return NULL;
 	}
-
+	mnl_seq = time(NULL);
+	result = mnl_nlmsg_batch_start(buf, buf_size);
+	if (result == NULL) {
+		syslog(LOG_ERR, "%s: mnl_nlmsg_batch_start(%p, %lu) returned NULL",
+		       "start_batch", buf, (unsigned long)buf_size);
+		return NULL;
+	}
+	nft_mnl_batch_put(mnl_nlmsg_batch_current(result),
+					  NFNL_MSG_BATCH_BEGIN, mnl_seq++);
+	if (!mnl_nlmsg_batch_next(result)) {
+		syslog(LOG_ERR, "%s: mnl_nlmsg_batch_next returned false", "start_batch");
+	}
 	return result;
 }
 

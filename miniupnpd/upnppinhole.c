@@ -2,7 +2,7 @@
 /* vim: tabstop=4 shiftwidth=4 noexpandtab
  * MiniUPnP project
  * http://miniupnp.free.fr/ or https://miniupnp.tuxfamily.org/
- * (c) 2006-2025 Thomas Bernard
+ * (c) 2006-2026 Thomas Bernard
  * This software is subject to the conditions detailed
  * in the LICENCE file provided within the distribution */
 
@@ -120,16 +120,29 @@ lease_file6_add(const char * rem_client,
 	if (timestamp != 0) {
 		timestamp -= upnp_time();
 	}
-	if (rem_client == NULL) {
-		rem_client = "";
-	}
-	if (desc == NULL) {
-		desc = "";
+
+	fprintf(fd, "%s;%s;%hu;",
+	        proto_itoa(proto), int_client, int_port);
+
+	if (rem_client != NULL) {
+		while (*rem_client) {
+			if (*rem_client >= ' ' && *rem_client != ';')
+				fputc(*rem_client, fd);
+			rem_client++;
+		}
 	}
 
-	fprintf(fd, "%s;%s;%hu;%s;%hu;%u;%u;%s\n",
-	        proto_itoa(proto), int_client, int_port, rem_client, rem_port,
-	        uid, timestamp, desc);
+	fprintf(fd, ";%hu;%u;%u;",
+	        rem_port, uid, timestamp);
+
+	if (desc != NULL) {
+		while (*desc) {
+			if (*desc >= ' ')
+				fputc(*desc, fd);
+			desc++;
+		}
+	}
+	fputc('\n', fd);
 	fclose(fd);
 
 	return 0;
@@ -546,6 +559,19 @@ int reload_from_lease_file6(void)
 			p++;
 		while(isspace(*p) && (p > desc))
 			*(p--) = '\0';
+
+		/* Ensure port is non-privileged and RemoteHost is valid */
+		if (int_port < 1024) {
+		    syslog(LOG_WARNING, "ignoring lease file pinhole with privileged port %hu", int_port);
+		    continue;
+		}
+		if (rem_client && rem_client[0] != '\0' && rem_client[0] != '*') {
+			struct in6_addr rem_addr;
+			if (inet_pton(AF_INET6, rem_client, &rem_addr) != 1) {
+				syslog(LOG_WARNING, "ignoring lease file pinhole with invalid RemoteHost: %s", rem_client);
+				continue;
+			}
+		}
 
 		if(timestamp > 0) {
 			if(timestamp <= (unsigned int)current_unix_time) {

@@ -10,6 +10,7 @@
 #include <string.h>
 #include <syslog.h>
 #include <errno.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -58,6 +59,10 @@
 /* IPT_ALIGN was renamed XT_ALIGN in iptables-1.4.11 */
 #ifndef IPT_ALIGN
 #define IPT_ALIGN XT_ALIGN
+#endif
+
+#if defined(TINY_NF_NAT_H) && defined(IPT_SO_GET_REVISION_TARGET)
+#define ENABLE_DNAT_REVISION2
 #endif
 
 #include "../macros.h"
@@ -136,6 +141,79 @@ static int
 addpeerdscprule(int proto, unsigned char dscp,
            const char * iaddr, unsigned short iport,
            const char * rhost, unsigned short rport);
+
+/* iptables >= 1.8.8 only registers the highest DNAT revision the kernel
+ * supports, so a revision 0 rule is listed as "DNAT [unsupported revision]"
+ * on Linux >= 4.18. Create DNAT rules with that same revision. (#837) */
+static int dnat_revision = -1;
+
+static int
+get_dnat_revision(void)
+{
+#ifdef ENABLE_DNAT_REVISION2
+	struct xt_get_revision rev;
+	socklen_t len = sizeof(rev);
+	int s;
+#endif
+
+	if(dnat_revision >= 0)
+		return dnat_revision;
+	dnat_revision = 0;
+#ifdef ENABLE_DNAT_REVISION2
+	s = socket(PF_INET, SOCK_RAW, IPPROTO_RAW);
+	if(s >= 0) {
+		memset(&rev, 0, sizeof(rev));
+		strncpy(rev.name, "DNAT", sizeof(rev.name));
+		rev.revision = 2;
+		if(getsockopt(s, IPPROTO_IP, IPT_SO_GET_REVISION_TARGET, &rev, &len) >= 0)
+			dnat_revision = 2;
+		close(s);
+	}
+#endif
+	return dnat_revision;
+}
+
+/* address (network order) and port (host order) of a DNAT target */
+static void
+get_dnat_target_addr_port(const struct ipt_entry_target * target,
+                          uint32_t * addr, unsigned short * port)
+{
+	const struct ip_nat_multi_range * mr;
+#ifdef ENABLE_DNAT_REVISION2
+	const struct nf_nat_range2 * range2;
+
+	if(target->u.user.revision == 2) {
+		range2 = (const struct nf_nat_range2 *)&target->data[0];
+		if(addr)
+			*addr = range2->min_addr.ip;
+		if(port)
+			*port = ntohs(range2->min_proto.all);
+		return;
+	}
+#endif
+	mr = (const struct ip_nat_multi_range *)&target->data[0];
+	if(addr)
+		*addr = mr->range[0].min_ip;
+	if(port)
+		*port = ntohs(mr->range[0].min.all);
+}
+
+static void
+set_dnat_target_port(struct ipt_entry_target * target, unsigned short port)
+{
+	struct ip_nat_multi_range * mr;
+#ifdef ENABLE_DNAT_REVISION2
+	struct nf_nat_range2 * range2;
+
+	if(target->u.user.revision == 2) {
+		range2 = (struct nf_nat_range2 *)&target->data[0];
+		range2->min_proto.all = range2->max_proto.all = htons(port);
+		return;
+	}
+#endif
+	mr = (struct ip_nat_multi_range *)&target->data[0];
+	mr->range[0].min.all = mr->range[0].max.all = htons(port);
+}
 
 /* dummy init and shutdown functions
  * Only test iptc_init() */
@@ -241,16 +319,20 @@ get_redirect_desc(unsigned short eport, int proto,
 	{
 		if(p->eport == eport && p->proto == (short)proto)
 		{
-			if(desc)
+			if(desc) {
 				strncpy(desc, p->str, desclen);
+				desc[desclen-1] = '\0';
+			}
 			if(timestamp)
 				*timestamp = p->timestamp;
 			return;
 		}
 	}
 	/* if no description was found, return miniupnpd as default */
-	if(desc)
+	if(desc) {
 		strncpy(desc, "miniupnpd", desclen);
+		desc[desclen-1] = '\0';
+	}
 	if(timestamp)
 		*timestamp = 0;
 }
@@ -360,7 +442,7 @@ get_nat_redirect_rule(const char * nat_chain_name, const char * ifname, unsigned
 	IPTC_HANDLE h;
 	const struct ipt_entry * e;
 	const struct ipt_entry_target * target;
-	const struct ip_nat_multi_range * mr;
+	uint32_t daddr;
 	const struct ipt_entry_match *match;
 	UNUSED(ifname);
 
@@ -406,9 +488,8 @@ get_nat_redirect_rule(const char * nat_chain_name, const char * ifname, unsigned
 				}
 				target = (void *)e + e->target_offset;
 				/* target = ipt_get_target(e); */
-				mr = (const struct ip_nat_multi_range *)&target->data[0];
-				snprintip(iaddr, iaddrlen, ntohl(mr->range[0].min_ip));
-				*iport = ntohs(mr->range[0].min.all);
+				get_dnat_target_addr_port(target, &daddr, iport);
+				snprintip(iaddr, iaddrlen, ntohl(daddr));
 				get_redirect_desc(eport, proto, desc, desclen, timestamp);
 				if(packets)
 					*packets = e->counters.pcnt;
@@ -448,7 +529,7 @@ get_redirect_rule_by_index(int index,
 	IPTC_HANDLE h;
 	const struct ipt_entry * e;
 	const struct ipt_entry_target * target;
-	const struct ip_nat_multi_range * mr;
+	uint32_t daddr;
 	const struct ipt_entry_match *match;
 	UNUSED(ifname);
 
@@ -492,9 +573,8 @@ get_redirect_rule_by_index(int index,
 					*eport = info->dpts[0];
 				}
 				target = (void *)e + e->target_offset;
-				mr = (const struct ip_nat_multi_range *)&target->data[0];
-				snprintip(iaddr, iaddrlen, ntohl(mr->range[0].min_ip));
-				*iport = ntohs(mr->range[0].min.all);
+				get_dnat_target_addr_port(target, &daddr, iport);
+				snprintip(iaddr, iaddrlen, ntohl(daddr));
 				get_redirect_desc(*eport, *proto, desc, desclen, timestamp);
 				if(packets)
 					*packets = e->counters.pcnt;
@@ -788,9 +868,7 @@ delete_redirect_and_filter_rules(unsigned short eport, int proto)
 				 * of the rule */
 				index = i;
 				target = (void *)e + e->target_offset;
-				mr = (const struct ip_nat_multi_range *)&target->data[0];
-				iaddr = mr->range[0].min_ip;
-				iport = ntohs(mr->range[0].min.all);
+				get_dnat_target_addr_port(target, &iaddr, &iport);
 				r = 0;
 				break;
 			}
@@ -988,6 +1066,10 @@ get_tcp_match(unsigned short dport, unsigned short sport)
 	size =   IPT_ALIGN(sizeof(struct ipt_entry_match))
 	       + IPT_ALIGN(sizeof(struct ipt_tcp));
 	match = calloc(1, size);
+	if(!match) {
+		syslog(LOG_ERR, "%s: calloc(%d) error", "get_tcp_match", (int)size);
+		return NULL;
+	}
 	match->u.match_size = size;
 	strncpy(match->u.user.name, "tcp", sizeof(match->u.user.name));
 	tcpinfo = (struct ipt_tcp *)match->data;
@@ -1017,6 +1099,10 @@ get_udp_match(unsigned short dport, unsigned short sport)
 	size =   IPT_ALIGN(sizeof(struct ipt_entry_match))
 	       + IPT_ALIGN(sizeof(struct ipt_udp));
 	match = calloc(1, size);
+	if(!match) {
+		syslog(LOG_ERR, "%s: calloc(%d) error", "get_udp_match", (int)size);
+		return NULL;
+	}
 	match->u.match_size = size;
 	strncpy(match->u.user.name, "udp", sizeof(match->u.user.name));
 	udpinfo = (struct ipt_udp *)match->data;
@@ -1044,10 +1130,31 @@ get_dnat_target(const char * daddr, unsigned short dport)
 	struct ip_nat_multi_range * mr;
 	struct ip_nat_range * range;
 	size_t size;
+#ifdef ENABLE_DNAT_REVISION2
+	struct nf_nat_range2 * range2;
+
+	if(get_dnat_revision() == 2) {
+		size =   IPT_ALIGN(sizeof(struct ipt_entry_target))
+		       + IPT_ALIGN(sizeof(struct nf_nat_range2));
+		target = calloc(1, size);
+		target->u.target_size = size;
+		strncpy(target->u.user.name, "DNAT", sizeof(target->u.user.name));
+		target->u.user.revision = 2;
+		range2 = (struct nf_nat_range2 *)&target->data[0];
+		range2->min_addr.ip = range2->max_addr.ip = inet_addr(daddr);
+		range2->min_proto.all = range2->max_proto.all = htons(dport);
+		range2->flags = IP_NAT_RANGE_MAP_IPS | IP_NAT_RANGE_PROTO_SPECIFIED;
+		return target;
+	}
+#endif
 
 	size =   IPT_ALIGN(sizeof(struct ipt_entry_target))
 	       + IPT_ALIGN(sizeof(struct ip_nat_multi_range));
 	target = calloc(1, size);
+	if(!target) {
+		syslog(LOG_ERR, "%s: calloc(%d) error", "get_dnat_target", (int)size);
+		return NULL;
+	}
 	target->u.target_size = size;
 	strncpy(target->u.user.name, "DNAT", sizeof(target->u.user.name));
 	/* one ip_nat_range already included in ip_nat_multi_range */
@@ -1072,6 +1179,10 @@ get_snat_target(const char * saddr, unsigned short sport)
 	size =   IPT_ALIGN(sizeof(struct ipt_entry_target))
 	       + IPT_ALIGN(sizeof(struct ip_nat_multi_range));
 	target = calloc(1, size);
+	if(!target) {
+		syslog(LOG_ERR, "%s: calloc(%d) error", "get_snat_target", (int)size);
+		return NULL;
+	}
 	target->u.target_size = size;
 	strncpy(target->u.user.name, "SNAT", sizeof(target->u.user.name));
 	/* one ip_nat_range already included in ip_nat_multi_range */
@@ -1095,6 +1206,10 @@ get_dscp_target(unsigned char dscp)
 	size =   IPT_ALIGN(sizeof(struct ipt_entry_target))
 	       + IPT_ALIGN(sizeof(struct xt_DSCP_info));
 	target = calloc(1, size);
+	if(!target) {
+		syslog(LOG_ERR, "%s: calloc(%d) error", "get_dscp_target", (int)size);
+		return NULL;
+	}
 	target->u.target_size = size;
 	strncpy(target->u.user.name, "DSCP", sizeof(target->u.user.name));
 	/* one ip_nat_range already included in ip_nat_multi_range */
@@ -1115,6 +1230,10 @@ get_masquerade_target(unsigned short port)
 	size =   IPT_ALIGN(sizeof(struct ipt_entry_target))
 	       + IPT_ALIGN(sizeof(struct ip_nat_multi_range));
 	target = calloc(1, size);
+	if(!target) {
+		syslog(LOG_ERR, "%s: calloc(%d) error", "get_masquerade_target", (int)size);
+		return NULL;
+	}
 	target->u.target_size = size;
 	strncpy(target->u.user.name, "MASQUERADE", sizeof(target->u.user.name));
 	/* one ip_nat_range already included in ip_nat_multi_range */
@@ -1228,6 +1347,13 @@ addnatrule(int proto, unsigned short eport,
 	e->nfcache = NFC_UNKNOWN;
 #endif
 	target = get_dnat_target(iaddr, iport);
+	if(!match || !target) {
+		syslog(LOG_ERR, "%s: failed to build match/target", "addnatrule");
+		free(match);
+		free(target);
+		free(e);
+		return -1;
+	}
 #ifdef NFC_IP_DST_PT
 	e->nfcache |= NFC_IP_DST_PT;
 #endif
@@ -1302,6 +1428,13 @@ addmasqueraderule(int proto,
 	e->nfcache = NFC_UNKNOWN;
 #endif
 	target = get_masquerade_target(eport);
+	if(!match || !target) {
+		syslog(LOG_ERR, "%s: failed to build match/target", "addmasqueraderule");
+		free(match);
+		free(target);
+		free(e);
+		return -1;
+	}
 #ifdef NFC_IP_DST_PT
 	e->nfcache |= NFC_IP_DST_PT;
 #endif
@@ -1386,6 +1519,13 @@ addpeernatrule(int proto,
 	e->nfcache = NFC_UNKNOWN;
 #endif
 	target = get_snat_target(eaddr, eport);
+	if(!match || !target) {
+		syslog(LOG_ERR, "%s: failed to build match/target", "addpeernatrule");
+		free(match);
+		free(target);
+		free(e);
+		return -1;
+	}
 #ifdef NFC_IP_DST_PT
 	e->nfcache |= NFC_IP_DST_PT;
 #endif
@@ -1464,6 +1604,13 @@ addpeerdscprule(int proto, unsigned char dscp,
 	e->nfcache = NFC_UNKNOWN;
 #endif
 	target = get_dscp_target(dscp);
+	if(!match || !target) {
+		syslog(LOG_ERR, "%s: failed to build match/target", "addpeerdscprule");
+		free(match);
+		free(target);
+		free(e);
+		return -1;
+	}
 #ifdef NFC_IP_DST_PT
 	e->nfcache |= NFC_IP_DST_PT;
 #endif
@@ -1521,6 +1668,10 @@ get_accept_target(void)
 	size =   IPT_ALIGN(sizeof(struct ipt_entry_target))
 	       + IPT_ALIGN(sizeof(int));
 	target = calloc(1, size);
+	if(!target) {
+		syslog(LOG_ERR, "%s: calloc(%d) error", "get_accept_target", (int)size);
+		return NULL;
+	}
 	target->u.user.target_size = size;
 	strncpy(target->u.user.name, "ACCEPT", sizeof(target->u.user.name));
 	return target;
@@ -1556,6 +1707,13 @@ add_filter_rule(int proto, const char * rhost,
 	e->nfcache = NFC_UNKNOWN;
 #endif
 	target = get_accept_target();
+	if(!match || !target) {
+		syslog(LOG_ERR, "%s: failed to build match/target", "add_filter_rule");
+		free(match);
+		free(target);
+		free(e);
+		return -1;
+	}
 #ifdef NFC_IP_DST_PT
 	e->nfcache |= NFC_IP_DST_PT;
 #endif
@@ -1809,9 +1967,7 @@ update_portmapping(const char * ifname, unsigned short eport, int proto,
 				found = 1;
 				index = i;
 				target = (void *)e + e->target_offset;
-				mr = (struct ip_nat_multi_range *)&target->data[0];
-				iaddr = mr->range[0].min_ip;
-				old_iport = ntohs(mr->range[0].min.all);
+				get_dnat_target_addr_port(target, &iaddr, &old_iport);
 				entry_len = sizeof(struct ipt_entry) + match->u.match_size + target->u.target_size;
 				new_e = malloc(entry_len);
 				if(new_e == NULL) {
@@ -1836,8 +1992,7 @@ update_portmapping(const char * ifname, unsigned short eport, int proto,
 		return -1;
 	syslog(LOG_INFO, "Trying to update nat rule at index %u", index);
 	target = (void *)new_e + new_e->target_offset;
-	mr = (struct ip_nat_multi_range *)&target->data[0];
-	mr->range[0].min.all = mr->range[0].max.all = htons(iport);
+	set_dnat_target_port(target, iport);
 	/* first update the nat rule */
 	r = update_rule_and_commit("nat", miniupnpd_nat_chain, index, new_e);
 	free(new_e); new_e = NULL;
@@ -2166,6 +2321,21 @@ list_redirect_rule(const char * ifname)
 		}
 		printf("target = %s :\n", target_str);
 		target = (void *)e + e->target_offset;
+#ifdef ENABLE_DNAT_REVISION2
+		if(target->u.user.revision == 2) {
+			const struct nf_nat_range2 * range2;
+			range2 = (const struct nf_nat_range2 *)&target->data[0];
+			printf("  ips ");
+			printip(ntohl(range2->min_addr.ip));
+			printf(" ");
+			printip(ntohl(range2->max_addr.ip));
+			printf("\n  ports %hu %hu\n", ntohs(range2->min_proto.all),
+			          ntohs(range2->max_proto.all));
+			printf("  flags = %x\n", range2->flags);
+			index++;
+			continue;
+		}
+#endif
 		mr = (const struct ip_nat_multi_range *)&target->data[0];
 		printf("  ips ");
 		printip(ntohl(mr->range[0].min_ip));

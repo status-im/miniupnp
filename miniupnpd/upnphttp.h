@@ -2,7 +2,7 @@
 /* vim: tabstop=4 shiftwidth=4 noexpandtab
  * MiniUPnP project
  * http://miniupnp.free.fr/ or http://miniupnp.tuxfamily.org/
- * (c) 2006-2021 Thomas Bernard
+ * (c) 2006-2026 Thomas Bernard
  * This software is subject to the conditions detailed
  * in the LICENCE file provided within the distribution */
 
@@ -62,6 +62,7 @@ struct upnphttp {
 	/* request */
 	char * req_buf;
 	char accept_language[8];
+	int req_bufalloc;
 	int req_buflen;
 	int req_contentlen;
 	int req_contentoff;     /* header length */
@@ -99,7 +100,7 @@ struct upnphttp {
 /* If set, the POST request included a "Expect: 100-continue" header */
 #define FLAG_CONTINUE	0x40
 
-/* If set, the Content-Type is set to text/xml, otherwise it is text/xml */
+/* If set, the Content-Type is set to text/html, otherwise it is text/xml */
 #define FLAG_HTML		0x80
 
 /* If set, the corresponding Allow: header is set */

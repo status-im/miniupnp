@@ -3,7 +3,7 @@
  * Project : miniupnp
  * Web : http://miniupnp.free.fr/ or https://miniupnp.tuxfamily.org/
  * Author : Thomas BERNARD
- * copyright (c) 2005-2025 Thomas Bernard
+ * copyright (c) 2005-2026 Thomas Bernard
  * This software is subjet to the conditions detailed in the
  * provided LICENCE file. */
 #include <stdio.h>
@@ -694,7 +694,7 @@ ssdpDiscoverDevices(const char * const deviceTypes[],
 		if(error)
 			*error = MINISSDPC_SOCKET_ERROR;
 		PRINT_SOCKET_ERROR("setsockopt(SO_REUSEADDR,...)");
-		goto error;
+		goto close_and_return;
 	}
 
 	if(ipv6) {
@@ -733,7 +733,7 @@ ssdpDiscoverDevices(const char * const deviceTypes[],
 				if(error)
 					*error = MINISSDPC_INVALID_INPUT;
 				fprintf(stderr, "Invalid multicast interface name %s\n", multicastif);
-				goto error;
+				goto close_and_return;
 			}
 			if(setsockopt(sudp, IPPROTO_IPV6, IPV6_MULTICAST_IF, &ifindex, sizeof(ifindex)) < 0)
 			{
@@ -778,7 +778,7 @@ ssdpDiscoverDevices(const char * const deviceTypes[],
 				if(ioctl(sudp, SIOCGIFADDR, &ifr, &ifrlen) < 0)
 				{
 					PRINT_SOCKET_ERROR("ioctl(...SIOCGIFADDR...)");
-					goto error;
+					goto close_and_return;
 				}
 				mc_if.s_addr = ((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr.s_addr;
 #ifdef HAS_IP_MREQN
@@ -790,7 +790,7 @@ ssdpDiscoverDevices(const char * const deviceTypes[],
 					if(error)
 						*error = MINISSDPC_INVALID_INPUT;
 					fprintf(stderr, "Invalid multicast ip address / interface name %s\n", multicastif);
-					goto error;
+					goto close_and_return;
 				}
 				if(setsockopt(sudp, IPPROTO_IP, IP_MULTICAST_IF, (const char *)&reqn, sizeof(reqn)) < 0)
 				{
@@ -819,8 +819,7 @@ ssdpDiscoverDevices(const char * const deviceTypes[],
 		if(error)
 			*error = MINISSDPC_SOCKET_ERROR;
 		PRINT_SOCKET_ERROR("bind");
-		closesocket(sudp);
-		return NULL;
+		goto close_and_return;
 	}
 
 	if(error)
@@ -844,7 +843,7 @@ ssdpDiscoverDevices(const char * const deviceTypes[],
 		if ((unsigned int)n >= sizeof(bufr)) {
 			if(error)
 				*error = MINISSDPC_MEMORY_ERROR;
-			goto error;
+			goto close_and_return;
 		}
 #ifdef DEBUG
 		/*printf("Sending %s", bufr);*/
@@ -936,7 +935,7 @@ ssdpDiscoverDevices(const char * const deviceTypes[],
 					/* error */
 					if(error)
 						*error = MINISSDPC_SOCKET_ERROR;
-					goto error;
+					goto close_and_return;
 				} else if (n == 0) {
 					/* no data or Time Out */
 #ifdef DEBUG
@@ -946,7 +945,7 @@ ssdpDiscoverDevices(const char * const deviceTypes[],
 						/* found some devices, stop now*/
 						if(error)
 							*error = MINISSDPC_SUCCESS;
-						goto error;
+						goto close_and_return;
 					}
 				} else {
 					const char * descURL=NULL;
@@ -963,11 +962,11 @@ ssdpDiscoverDevices(const char * const deviceTypes[],
 #endif /* DEBUG */
 						for(tmp=devlist; tmp; tmp = tmp->pNext) {
 							if(strncmp(tmp->descURL, descURL, urlsize) == 0 &&
-							   tmp->descURL[urlsize] == '\0' &&
+							   (int)strlen(tmp->descURL) == urlsize &&
 							   strncmp(tmp->st, st, stsize) == 0 &&
-							   tmp->st[stsize] == '\0' &&
+							   (int)strlen(tmp->st) == stsize &&
 							   (usnsize == 0 || strncmp(tmp->usn, usn, usnsize) == 0) &&
-							   tmp->usn[usnsize] == '\0')
+							   (int)strlen(tmp->usn) == usnsize)
 								break;
 						}
 						/* at the exit of the loop above, tmp is null if
@@ -979,7 +978,7 @@ ssdpDiscoverDevices(const char * const deviceTypes[],
 							/* memory allocation error */
 							if(error)
 								*error = MINISSDPC_MEMORY_ERROR;
-							goto error;
+							goto close_and_return;
 						}
 						tmp->pNext = devlist;
 						tmp->descURL = tmp->buffer;
@@ -1016,7 +1015,7 @@ ssdpDiscoverDevices(const char * const deviceTypes[],
 			}
 		}
 	}
-error:
+close_and_return:
 	closesocket(sudp);
 	return devlist;
 }
